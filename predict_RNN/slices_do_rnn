@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Feb 15 15:28:59 2017
+
+@author: hadoop
+"""
+import numpy as np
+import tensorflow as tf
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+
+sz_trade = pd.read_csv('/home/hadoop/PycharmProjects/finance/sz_trade.csv')        
+close = list(sz_trade['close'])
+close_compute = np.array(close[2:])
+close = np.array(close[:len(close)-2])
+return_list = (close_compute - close)/close
+sz_trade = sz_trade.iloc[2:,:]
+sz_trade['return'] = return_list
+scaler = MinMaxScaler()
+data = np.array(sz_trade)
+data = scaler.fit_transform(data[:,1:])
+data_x = data[:,:4].reshape([-1,10,4])
+data_y = data[:,4].reshape([-1,10,1])
+train_data_x = np.array(data_x[:120,:,:],dtype = 'float32')        
+train_data_y = np.array(data_y[:120,:,:],dtype = 'float32')
+vali_data_x = np.array(data_x[120:,:,:],dtype = 'float32')
+vali_data_y = np.array(data_y[120:,:,:],dtype = 'float32')    
+
+
+input_size = 4
+output_size = 1
+cell_size = 15
+batch_size = 10
+learning_rate = 0.01
+n_steps = 10
+xs = tf.placeholder(tf.float32, [None, n_steps, input_size], name='xs')
+ys = tf.placeholder(tf.float32, [None, n_steps, output_size], name='ys')
+keep_prob = tf.placeholder(tf.float32, name='keep_prob')
+
+# input layer
+l_in_x = tf.reshape(xs,[-1,input_size], name='x_input')
+Ws_in = tf.Variable(tf.random_normal([input_size, cell_size]))
+bs_in = tf.Variable(tf.zeros([cell_size,])+0.1)
+l_in_y = tf.matmul(l_in_x,Ws_in)+bs_in
+l_in_y = tf.reshape(l_in_y,[-1,n_steps,cell_size],name='cell_input')
+
+# LSTM layer
+lstm_cell = tf.nn.rnn_cell.DropoutWrapper(tf.nn.rnn_cell.BasicLSTMCell(cell_size, forget_bias=1.0, state_is_tuple=True), output_keep_prob=keep_prob)
+num_size = 3
+lstm_cells = tf.nn.rnn_cell.MultiRNNCell([lstm_cell]*num_size, state_is_tuple=True)
+cells_init_state = lstm_cells.zero_state(batch_size,dtype=tf.float32)
+cells_outputs, cells_final_state = tf.nn.dynamic_rnn(lstm_cells, l_in_y, initial_state=cells_init_state, time_major=False)
+
+
+# output layer
+l_out_x = tf.reshape(cells_outputs,[-1,cell_size],name = 'y_input')
+Ws_out = tf.Variable(tf.random_normal([cell_size, output_size]))
+bs_out = tf.Variable(tf.zeros([output_size,])+0.1)
+pred = tf.matmul(l_out_x,Ws_out)+bs_out
+
+
+def ms_error(y_pre, y_target):
+    return tf.abs(y_pre-y_target)  
+  
+#losses = tf.nn.seq2seq.sequence_loss_by_example([tf.reshape(pred,[-1],name='reshape_pred')],
+#                                                [tf.reshape(ys,[-1],name='reshape_target')],
+#                                                [tf.ones([batch_size*n_steps],dtype='float32')],
+#                                                average_across_timesteps=True, 
+#                                                softmax_loss_function=ms_error, 
+#                                                name='losses')
+
+cost=tf.reduce_mean(ms_error(tf.reshape(pred,[-1]),tf.reshape(ys,[-1])))
+train_op = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
+
+
+
+with tf.Session() as sess:
+    init_op = tf.global_variables_initializer()
+    sess.run(init_op)
+    max_epoch = 10
+    epoch = 0
+    while epoch <= max_epoch:
+        batch_start = 0 
+        for batch_p in range(12): # range will depend the train_data.rows
+            if batch_p ==0:
+                feed_dict_train = {xs:train_data_x[0:batch_size,:,:], ys:train_data_y[0:batch_size,:,:],keep_prob: 1}
+            else:
+                batch_start = batch_p*batch_size
+                batch_end = (batch_p+1)*batch_size
+                feed_dict_train = {xs:train_data_x[batch_start:batch_end,:,:], ys:train_data_y[batch_start:batch_end,:,:], cells_init_state:state, keep_prob: 0.7}
+            sess.run(train_op,feed_dict=feed_dict_train)
+            state = sess.run(cells_final_state,feed_dict=feed_dict_train)
+            cost= sess.run(tf.cast(cost,dtype=tf.float32),feed_dict = feed_dict_train)
+            mean_pred= sess.run(tf.reduce_mean(pred), feed_dict = feed_dict_train)
+            print(("epoch: %d, batch: %d, cost: %f, mean_pred: %f" %(epoch, batch_p, cost, mean_pred))) 
+        epoch += 1
+#    if epoch % 10 == 0:
+#        batch_start = 0
+#        for batch_p in range()
+#                            
+#            batch_start = 0 
+#        for batch_p in range(6):
+#            feed_dict_vali = {xs:vali_data_x, ys:vali_data_y,keep_prob: 1}
+#            vali_pred = sess.run(pred,feed_dict = feed_dict_vali)
+#            loss_mean = np.mean(tf.square(tf.reshape(vali_pred,[-1])-tf.reshape(vali_data_y,[-1])))
+#            print(("step: %d, loss: %f" %(step, loss_mean)))
